@@ -1,0 +1,28 @@
+# Binários gerados
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+temp.exe
+extrator.exe
+app.exe
+
+# Pastas de cache e build locais do Go (que criamos para burlar o bloqueio)
+.gocache/
+.gotmp/
+
+# Arquivos de dados gerados localmente
+*.csv
+*.jsonl
+dados_extraidos.jsonl
+planilha_certificados.csv
+
+# Arquivos temporários de imagens
+tmp_*
+
+# Scripts de teste com chaves sensíveis
+list_models.go
+
+# Variáveis de ambiente
+.env
