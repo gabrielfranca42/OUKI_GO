@@ -66,17 +66,22 @@ Retorne APENAS o JSON válido seguindo essas chaves, sem nenhuma outra formataç
 		return nil, fmt.Errorf("erro ao ler arquivo de imagem: %w", err)
 	}
 
-	// Identifica o formato pro SDK do Google (não precisa da palavra "image/")
-	mimeType := "jpeg"
+	var filePart genai.Part
 	lowPath := strings.ToLower(imagePath)
-	if strings.HasSuffix(lowPath, ".png") {
-		mimeType = "png"
-	} else if strings.HasSuffix(lowPath, ".webp") {
-		mimeType = "webp"
+	if strings.HasSuffix(lowPath, ".pdf") {
+		filePart = genai.Blob{MIMEType: "application/pdf", Data: imgData}
+	} else {
+		mimeType := "jpeg"
+		if strings.HasSuffix(lowPath, ".png") {
+			mimeType = "png"
+		} else if strings.HasSuffix(lowPath, ".webp") {
+			mimeType = "webp"
+		}
+		filePart = genai.ImageData(mimeType, imgData)
 	}
 
 	// Dispara a requisição pra IA
-	resp, err := model.GenerateContent(ctx, genai.Text(prompt), genai.ImageData(mimeType, imgData))
+	resp, err := model.GenerateContent(ctx, genai.Text(prompt), filePart)
 	if err != nil {
 		return nil, fmt.Errorf("falha na API do Gemini: %w", err)
 	}

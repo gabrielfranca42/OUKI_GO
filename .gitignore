@@ -11,6 +11,8 @@ app.exe
 # Pastas de cache e build locais do Go (que criamos para burlar o bloqueio)
 .gocache/
 .gotmp/
+gotmp_seguro/
+meutmp/
 
 # Arquivos de dados gerados localmente
 *.csv

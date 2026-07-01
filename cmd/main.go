@@ -14,11 +14,16 @@ import (
 	"certextractor/internal/application/usecase"
 	"certextractor/internal/infra/ai"
 	"certextractor/internal/infra/ocr"
+
+	"github.com/joho/godotenv"
 )
 
 var mu sync.Mutex
 
 func main() {
+	// Carrega as variáveis do .env (ignora erro se o arquivo não existir)
+	_ = godotenv.Load()
+
 	// 1. Instanciar dependências (DDD)
 	tesseractOCR := ocr.NewTesseractProvider()
 	gemini := ai.NewGeminiExtractor()
@@ -48,8 +53,8 @@ func main() {
 	}
 
 	var imagensValidas []string
-	// Aceitando imagens (e PDF se a IA de visão for configurada para ler, mas o Tesseract precisa de imagem)
-	validExtensions := map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".webp": true}
+	// Aceitando imagens e PDFs
+	validExtensions := map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".webp": true, ".pdf": true}
 
 	for _, file := range files {
 		if file.IsDir() {
@@ -62,7 +67,7 @@ func main() {
 	}
 
 	if len(imagensValidas) == 0 {
-		fmt.Println("\n[AVISO] Nenhuma imagem válida (PNG, JPG, JPEG) foi encontrada nesta pasta.")
+		fmt.Println("\n[AVISO] Nenhuma imagem ou PDF válido foi encontrado nesta pasta.")
 		return
 	}
 
