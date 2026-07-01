@@ -33,7 +33,7 @@ func (g *GroqExtractor) ExtractData(ctx context.Context, imagePath string) (*ent
 	fmt.Printf("[Groq] Lendo texto cru via Tesseract: %s\n", preview)
 	
 	// Retorno mockado (substituir pela resposta do LLM Parseada)
-	return entity.NewCertificate("Aluno Groq Teste", "Curso Groq", 20, "EAD")
+	return entity.NewCertificate("Aluno Groq Teste", "Curso Groq", 20, "EAD", "15/05/2026", "Curso")
 }
 
 func (g *GroqExtractor) ProviderName() string {

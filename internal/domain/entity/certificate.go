@@ -5,15 +5,17 @@ import "fmt"
 // Certificate representa as informações extraídas da imagem do certificado.
 // DDD: Aggregate Root da camada de Domínio.
 type Certificate struct {
-	StudentName string `json:"student_name"` // Nome do aluno
-	CourseName  string `json:"course_name"`  // Nome do curso
-	Hours       int    `json:"hours"`        // Carga horária em horas
-	CourseType  string `json:"course_type"`  // Tipo de curso (Presencial, EAD, Extensão, etc.)
-	Hash        string `json:"hash"`         // Hash único para evitar duplicidade
+	StudentName    string `json:"student_name"` // Nome do aluno
+	CourseName     string `json:"course_name"`  // Nome do curso
+	Hours          int    `json:"hours"`        // Carga horária em horas
+	CourseType     string `json:"course_type"`  // Tipo de curso (Presencial, EAD, etc)
+	CompletionDate string `json:"completion_date"` // Data de conclusão (DD/MM/AAAA)
+	Category       string `json:"category"`     // Categoria (Curso, Palestra, Evento, Estágio...)
+	Hash           string `json:"hash"`         // Hash único para evitar duplicidade
 }
 
 // NewCertificate cria um Certificate válido, aplicando regras de negócio.
-func NewCertificate(name string, courseName string, hours int, courseType string) (*Certificate, error) {
+func NewCertificate(name string, courseName string, hours int, courseType string, completionDate string, category string) (*Certificate, error) {
 	if name == "" {
 		return nil, fmt.Errorf("nome do aluno não pode ser vazio")
 	}
@@ -31,10 +33,12 @@ func NewCertificate(name string, courseName string, hours int, courseType string
 	hashInput := fmt.Sprintf("%s|%s|%d", name, courseName, hours)
 	
 	return &Certificate{
-		StudentName: name,
-		CourseName:  courseName,
-		Hours:       hours,
-		CourseType:  courseType,
-		Hash:        hashInput, // (Para produção poderíamos usar SHA256 aqui)
+		StudentName:    name,
+		CourseName:     courseName,
+		Hours:          hours,
+		CourseType:     courseType,
+		CompletionDate: completionDate,
+		Category:       category,
+		Hash:           hashInput, // (Para produção poderíamos usar SHA256 aqui)
 	}, nil
 }

@@ -30,7 +30,9 @@ def gerar_csv(jsonl_path, csv_path):
             'student_name': 'Nome do Aluno',
             'course_name': 'Nome do Curso',
             'hours': 'Carga Horária (h)',
-            'course_type': 'Tipo de Atividade'
+            'course_type': 'Formato',
+            'completion_date': 'Data de Conclusão',
+            'category': 'Categoria'
         }, inplace=True)
 
         # Salva em CSV padronizado (com delimitador ';')

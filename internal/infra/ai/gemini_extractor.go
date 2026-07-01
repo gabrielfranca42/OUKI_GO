@@ -22,10 +22,12 @@ func NewGeminiExtractor() *GeminiExtractor {
 // RespostaIA mapeia exatamente a estrutura de JSON que pediremos pro LLM
 type RespostaIA struct {
 	IsCertificate bool   `json:"is_certificate"`
-	StudentName   string `json:"student_name"`
-	CourseName    string `json:"course_name"`
-	Hours         int    `json:"hours"`
-	CourseType    string `json:"course_type"`
+	StudentName    string `json:"student_name"`
+	CourseName     string `json:"course_name"`
+	Hours          int    `json:"hours"`
+	CourseType     string `json:"course_type"`
+	CompletionDate string `json:"completion_date"`
+	Category       string `json:"category"`
 	Reason        string `json:"reason"`
 }
 
@@ -59,7 +61,9 @@ REGRAS CRÍTICAS:
    - "student_name" (Nome completo do aluno)
    - "course_name" (O nome do curso realizado)
    - "hours" (A carga horária apenas em número inteiro, ex: 40)
-   - "course_type" (O tipo de curso: EAD, Presencial, Workshop, Palestra, etc)
+   - "course_type" (O tipo de curso: EAD, Presencial, Workshop, etc)
+   - "completion_date" (A data de conclusão ou emissão do certificado. Se encontrar, retorne no formato DD/MM/AAAA)
+   - "category" (Categoria do certificado, DEVE SER UMA DESTAS: "Curso", "Palestra", "Evento", "Projeto de Extensão", "Estágio", ou "Outros")
 Retorne APENAS o JSON válido seguindo essas chaves, sem nenhuma outra formatação.
 `
 
@@ -112,12 +116,19 @@ Retorne APENAS o JSON válido seguindo essas chaves, sem nenhuma outra formataç
 	}
 
 	// === 2ª BARREIRA: A REGRA DE NEGÓCIO DO GO ===
-	return entity.NewCertificate(resposta.StudentName, resposta.CourseName, resposta.Hours, resposta.CourseType)
+	return entity.NewCertificate(
+		resposta.StudentName, 
+		resposta.CourseName, 
+		resposta.Hours, 
+		resposta.CourseType,
+		resposta.CompletionDate,
+		resposta.Category,
+	)
 }
 
 func (g *GeminiExtractor) mockFallback(imagePath string) (*entity.Certificate, error) {
 	fmt.Printf("[Gemini] (MOCK - Chave ausente) Lendo: %s\n", imagePath)
-	return entity.NewCertificate("Mocked sem API Key", "Curso Mock", 10, "Mock")
+	return entity.NewCertificate("Mocked sem API Key", "Curso Mock", 10, "Mock", "01/01/2026", "Curso")
 }
 
 func (g *GeminiExtractor) ProviderName() string {
