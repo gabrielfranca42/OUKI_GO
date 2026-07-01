@@ -23,6 +23,7 @@ func NewGeminiExtractor() *GeminiExtractor {
 type RespostaIA struct {
 	IsCertificate bool   `json:"is_certificate"`
 	StudentName   string `json:"student_name"`
+	CourseName    string `json:"course_name"`
 	Hours         int    `json:"hours"`
 	CourseType    string `json:"course_type"`
 	Reason        string `json:"reason"`
@@ -56,6 +57,7 @@ REGRAS CRÍTICAS:
 1. Se a imagem NÃO for um certificado, diploma ou declaração de horas (ex: foto de comida, tomate, paisagem, pessoas, print de meme), defina "is_certificate" como false e preencha o campo "reason" explicando o que a imagem realmente é.
 2. Se FOR de fato um certificado, defina "is_certificate" como true, e extraia:
    - "student_name" (Nome completo do aluno)
+   - "course_name" (O nome do curso realizado)
    - "hours" (A carga horária apenas em número inteiro, ex: 40)
    - "course_type" (O tipo de curso: EAD, Presencial, Workshop, Palestra, etc)
 Retorne APENAS o JSON válido seguindo essas chaves, sem nenhuma outra formatação.
@@ -110,12 +112,12 @@ Retorne APENAS o JSON válido seguindo essas chaves, sem nenhuma outra formataç
 	}
 
 	// === 2ª BARREIRA: A REGRA DE NEGÓCIO DO GO ===
-	return entity.NewCertificate(resposta.StudentName, resposta.Hours, resposta.CourseType)
+	return entity.NewCertificate(resposta.StudentName, resposta.CourseName, resposta.Hours, resposta.CourseType)
 }
 
 func (g *GeminiExtractor) mockFallback(imagePath string) (*entity.Certificate, error) {
 	fmt.Printf("[Gemini] (MOCK - Chave ausente) Lendo: %s\n", imagePath)
-	return entity.NewCertificate("Mocked sem API Key", 10, "Mock")
+	return entity.NewCertificate("Mocked sem API Key", "Curso Mock", 10, "Mock")
 }
 
 func (g *GeminiExtractor) ProviderName() string {

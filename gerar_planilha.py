@@ -21,9 +21,14 @@ def gerar_csv(jsonl_path, csv_path):
             print("Nenhum dado para exportar.")
             return
 
+        # Remove a coluna 'hash' se existir (é só pra validação interna)
+        if 'hash' in df.columns:
+            df.drop(columns=['hash'], inplace=True)
+
         # Renomeia as chaves do struct Go para PT-BR formatado
         df.rename(columns={
             'student_name': 'Nome do Aluno',
+            'course_name': 'Nome do Curso',
             'hours': 'Carga Horária (h)',
             'course_type': 'Tipo de Atividade'
         }, inplace=True)

@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"certextractor/internal/application/usecase"
+	"certextractor/internal/domain/entity"
 	"certextractor/internal/infra/ai"
 	"certextractor/internal/infra/ocr"
 
@@ -19,6 +20,26 @@ import (
 )
 
 var mu sync.Mutex
+
+// loadProcessedHashes lê o arquivo e retorna um mapa de hashes para barrar duplicatas
+func loadProcessedHashes() map[string]bool {
+	hashes := make(map[string]bool)
+	file, err := os.Open("dados_extraidos.jsonl")
+	if err != nil {
+		return hashes // Arquivo não existe ainda, retorna mapa vazio
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		var cert entity.Certificate
+		if err := json.Unmarshal([]byte(line), &cert); err == nil && cert.Hash != "" {
+			hashes[cert.Hash] = true
+		}
+	}
+	return hashes
+}
 
 func main() {
 	// Carrega as variáveis do .env (ignora erro se o arquivo não existir)
@@ -83,6 +104,8 @@ func main() {
 	// Você pediu um limite de cota igual a 2.
 	cotaMaxima := 2
 	processados := 0
+	
+	processedHashes := loadProcessedHashes()
 
 	for _, imgPath := range imagensValidas {
 		if processados >= cotaMaxima {
@@ -96,8 +119,14 @@ func main() {
 		if err != nil {
 			falhas = append(falhas, Falha{Arquivo: filepath.Base(imgPath), Motivo: err.Error()})
 		} else {
-			salvarResultadoNoDisco(cert)
-			sucessos = append(sucessos, filepath.Base(imgPath))
+			// Verifica se já processou esse certificado (Nome do Aluno + Nome do Curso + Horas iguais)
+			if processedHashes[cert.Hash] {
+				falhas = append(falhas, Falha{Arquivo: filepath.Base(imgPath), Motivo: "Certificado Duplicado: Este aluno já tem este curso/carga horária registrado."})
+			} else {
+				processedHashes[cert.Hash] = true // Adiciona no mapa em memória pra esse loop
+				salvarResultadoNoDisco(cert)
+				sucessos = append(sucessos, filepath.Base(imgPath))
+			}
 		}
 		processados++
 	}
@@ -140,7 +169,7 @@ func main() {
 	fmt.Println("=================================================")
 }
 
-func salvarResultadoNoDisco(cert interface{}) {
+func salvarResultadoNoDisco(cert *entity.Certificate) {
 	mu.Lock()
 	defer mu.Unlock()
 
