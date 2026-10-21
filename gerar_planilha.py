@@ -1,12 +1,10 @@
 import json
 import os
 import sys
+import csv
 import argparse
 import logging
 from datetime import datetime
-import openpyxl
-from openpyxl.styles import Font, Alignment
-import pandas as pd
 
 logging.basicConfig(
     level=logging.INFO,
@@ -60,34 +58,46 @@ def gerar_planilha_institucional(jsonl_path, csv_path, xlsx_path, turma_nome="TA
 
     logger.info(f"Total de alunos distintos identificados: {len(alunos)} ({list(alunos.keys())})")
 
-    # 1. Gerar CSV consolidado padronizado
+    # 1. Gerar CSV consolidado padronizado (usando biblioteca nativa csv do Python)
     try:
-        csv_rows = []
-        for r in records:
-            course_name = r.get("course_name", "")
-            declared_hours = r.get("declared_hours", r.get("hours", 0))
-            approved_hours = r.get("approved_hours", r.get("hours", 0))
-            completion_date = parse_date_str(r.get("completion_date", ""))
-            semester = r.get("semester", "")
-            student = r.get("student_name", "")
-
-            csv_rows.append({
-                "ALUNO": student,
-                "DESCRIÇÃO DA ATIVIDADE / TÍTULO DO CERTIFICADO": course_name,
-                "HORAS DECLARADAS": declared_hours,
-                "DATA": completion_date,
-                "SEMESTRE": semester,
-                "HORAS APROVEITADAS": approved_hours,
-                "CATEGORIA": r.get("category", "")
-            })
-
-        df = pd.DataFrame(csv_rows)
-        df.to_csv(csv_path, index=False, encoding='utf-8', sep=';')
-        logger.info(f"CSV consolidado gravado com sucesso: {csv_path} ({len(csv_rows)} linhas)")
+        headers_csv = [
+            "ALUNO",
+            "DESCRIÇÃO DA ATIVIDADE / TÍTULO DO CERTIFICADO",
+            "HORAS DECLARADAS",
+            "DATA",
+            "SEMESTRE",
+            "HORAS APROVEITADAS",
+            "CATEGORIA"
+        ]
+        with open(csv_path, 'w', encoding='utf-8', newline='') as f_csv:
+            writer = csv.writer(f_csv, delimiter=';')
+            writer.writerow(headers_csv)
+            for r in records:
+                writer.writerow([
+                    r.get("student_name", ""),
+                    r.get("course_name", ""),
+                    r.get("declared_hours", r.get("hours", 0)),
+                    parse_date_str(r.get("completion_date", "")),
+                    r.get("semester", ""),
+                    r.get("approved_hours", r.get("hours", 0)),
+                    r.get("category", "")
+                ])
+        logger.info(f"CSV consolidado gravado com sucesso: {csv_path} ({len(records)} linhas)")
     except Exception as e:
         logger.error(f"Falha ao gerar arquivo CSV ({csv_path}): {e}", exc_info=True)
 
     # 2. Gerar arquivo Excel (.xlsx) fiel ao modelo institucional
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, Alignment
+    except ImportError:
+        logger.warning(
+            "\n[AVISO IMPORTANTE]: A biblioteca 'openpyxl' não está instalada no Python."
+            "\nO CSV foi gerado com sucesso. Para gerar o arquivo formatado .xlsx, execute:"
+            "\npip install openpyxl\n"
+        )
+        return True
+
     for aluno_nome, certs in alunos.items():
         try:
             wb = openpyxl.Workbook()
