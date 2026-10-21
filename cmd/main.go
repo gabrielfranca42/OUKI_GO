@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"certextractor/internal/application/usecase"
 	"certextractor/internal/domain/entity"
@@ -22,23 +24,32 @@ import (
 
 var mu sync.Mutex
 
+func init() {
+	log.SetFlags(log.Ldate | log.Ltime | log.Lmsgprefix)
+	log.SetPrefix("[OUKI-GO] ")
+}
+
 // loadProcessedHashes lê o arquivo e retorna um mapa de hashes para barrar duplicatas
 func loadProcessedHashes() map[string]bool {
 	hashes := make(map[string]bool)
 	file, err := os.Open("dados_extraidos.jsonl")
 	if err != nil {
+		log.Printf("[INFO] Arquivo 'dados_extraidos.jsonl' ainda não existe. Iniciando base limpa.")
 		return hashes
 	}
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
+	count := 0
 	for scanner.Scan() {
 		line := scanner.Text()
 		var cert entity.Certificate
 		if err := json.Unmarshal([]byte(line), &cert); err == nil && cert.Hash != "" {
 			hashes[cert.Hash] = true
+			count++
 		}
 	}
+	log.Printf("[INFO] %d certificados já processados foram carregados do histórico.", count)
 	return hashes
 }
 
@@ -50,9 +61,13 @@ func getPythonCommand() string {
 }
 
 func main() {
-	_ = godotenv.Load()
+	if err := godotenv.Load(); err != nil {
+		log.Printf("[WARN] Arquivo .env não encontrado. Utilizando variáveis do ambiente do sistema.")
+	} else {
+		log.Printf("[INFO] Configurações do arquivo .env carregadas com sucesso.")
+	}
 
-	// 1. Instanciar dependências (DDD)
+	// 1. Instanciar dependências seguindo Clean Architecture / DDD
 	tesseractOCR := ocr.NewTesseractProvider()
 	gemini := ai.NewGeminiExtractor()
 	groq := ai.NewGroqExtractor(tesseractOCR)
@@ -60,12 +75,12 @@ func main() {
 	service := usecase.NewExtractCertificateService(balancer)
 
 	reader := bufio.NewReader(os.Stdin)
-	fmt.Print("====================================================\n")
+	fmt.Print("\n====================================================\n")
 	fmt.Print("🤖 OUKI GO - SISTEMA DE HORAS COMPLEMENTARES COM IA 🤖\n")
 	fmt.Print("====================================================\n\n")
 	fmt.Println("Selecione o modo de operação:")
 	fmt.Println("  [1] Processar certificados de uma pasta local")
-	fmt.Println("  [2] Baixar do Outlook Corporativo (Anexos + Google Drive) e processar")
+	fmt.Println("  [2] Baixar do E-mail (Gmail / Outlook / Google Drive) e processar")
 	fmt.Println("  [3] Apenas regenerar planilhas (XLSX institucional e CSV)")
 	fmt.Print("\nOpção (padrão 1): ")
 
@@ -83,16 +98,19 @@ func main() {
 	var dirPath string
 
 	if opcao == "2" {
-		fmt.Println("\n📥 Conectando ao Outlook corporativo e buscando e-mails...")
+		log.Printf("[INFO] Iniciando conector de e-mail (anexos e links do Google Drive)...")
 		pyCmd := getPythonCommand()
 		cmd := exec.Command(pyCmd, "email_fetcher.py", "--output", "downloads_certificados")
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
+
+		startEmailTime := time.Now()
 		if err := cmd.Run(); err != nil {
-			fmt.Printf("\n[ERRO] Falha ao executar o conector do Outlook: %v\n", err)
-			fmt.Println("Dica: verifique se OUTLOOK_EMAIL e OUTLOOK_PASSWORD estão configurados no .env")
+			log.Printf("[ERRO] Falha crítica ao executar o conector de e-mails: %v", err)
+			log.Printf("[DICA] Verifique se OUTLOOK_EMAIL e OUTLOOK_PASSWORD estão corretos no .env")
 			return
 		}
+		log.Printf("[INFO] Coleta de e-mails concluída em %v", time.Since(startEmailTime))
 		dirPath = "downloads_certificados"
 	} else {
 		fmt.Print("\nDigite o caminho da pasta com os certificados: ")
@@ -101,13 +119,13 @@ func main() {
 	}
 
 	if dirPath == "" {
-		fmt.Println("\n[ERRO] Caminho não pode ser vazio.")
+		log.Printf("[ERRO] Caminho do diretório não pode ser vazio.")
 		return
 	}
 
 	files, err := os.ReadDir(dirPath)
 	if err != nil {
-		fmt.Printf("\n[ERRO] Não foi possível ler a pasta '%s': %v\n", dirPath, err)
+		log.Printf("[ERRO] Não foi possível acessar o diretório '%s'. Motivo: %v", dirPath, err)
 		return
 	}
 
@@ -125,17 +143,18 @@ func main() {
 	}
 
 	if len(imagensValidas) == 0 {
-		fmt.Println("\n[AVISO] Nenhum certificado (imagem ou PDF) válido encontrado nesta pasta.")
+		log.Printf("[AVISO] Nenhum certificado válido (.pdf, .png, .jpg, .webp) encontrado na pasta '%s'.", dirPath)
 		return
 	}
 
-	fmt.Printf("\n[INFO] Encontrados %d certificados para processamento.\n", len(imagensValidas))
+	log.Printf("[INFO] Encontrados %d arquivos válidos para processamento na pasta '%s'.", len(imagensValidas), dirPath)
 
-	// Configuração de limite/cota (0 ou vazio = sem limite)
+	// Configuração de limite/cota
 	cotaMaxima := 0
 	if maxStr := os.Getenv("MAX_CERTIFICATES"); maxStr != "" {
-		if parsed, err := strconv.Atoi(maxStr); err == nil {
+		if parsed, err := strconv.Atoi(maxStr); err == nil && parsed > 0 {
 			cotaMaxima = parsed
+			log.Printf("[INFO] Limite configurado: máximo de %d certificados nesta execução.", cotaMaxima)
 		}
 	}
 
@@ -148,25 +167,37 @@ func main() {
 
 	processedHashes := loadProcessedHashes()
 	processados := 0
+	totalStartTime := time.Now()
 
 	for _, imgPath := range imagensValidas {
 		if cotaMaxima > 0 && processados >= cotaMaxima {
-			fmt.Printf("\n[AVISO] Limite de cota atingido (%d certificados). Pausando extração.\n", cotaMaxima)
+			log.Printf("[AVISO] Limite configurado de %d certificados atingido. Interrompendo lote.", cotaMaxima)
 			break
 		}
 
 		baseName := filepath.Base(imgPath)
-		fmt.Printf("\n⏳ Processando: %s ...\n", baseName)
+		log.Printf("---------------------------------------------------------")
+		log.Printf("[PROCESSO] Início da extração: %s (%d/%d)", baseName, processados+1, len(imagensValidas))
 
+		itemStart := time.Now()
 		cert, err := service.Execute(context.Background(), imgPath)
+		itemDuration := time.Since(itemStart)
+
 		if err != nil {
+			log.Printf("[FALHA] '%s' falhou após %v. Motivo: %v", baseName, itemDuration, err)
 			falhas = append(falhas, Falha{Arquivo: baseName, Motivo: err.Error()})
 		} else {
 			if processedHashes[cert.Hash] {
-				falhas = append(falhas, Falha{Arquivo: baseName, Motivo: "Certificado Duplicado: Este aluno já tem este curso/carga horária registrado."})
+				motivoDup := fmt.Sprintf("Certificado Duplicado: Aluno '%s' já possui registro idêntico para '%s' (%s).",
+					cert.StudentName, cert.CourseName, cert.Category)
+				log.Printf("[DUPLICATA] %s", motivoDup)
+				falhas = append(falhas, Falha{Arquivo: baseName, Motivo: motivoDup})
 			} else {
 				processedHashes[cert.Hash] = true
 				salvarResultadoNoDisco(cert)
+				log.Printf("[SUCESSO] '%s' concluído em %v -> Aluno: %s | Horas: %d declaradas / %d aproveitadas | Semestre: %s",
+					baseName, itemDuration, cert.StudentName, cert.DeclaredHours, cert.ApprovedHours, cert.Semester)
+
 				sucessos = append(sucessos, fmt.Sprintf("%s | %s (%d/%d hrs, %s)",
 					cert.StudentName, cert.CourseName, cert.ApprovedHours, cert.DeclaredHours, cert.Semester))
 			}
@@ -174,7 +205,11 @@ func main() {
 		processados++
 	}
 
-	// Relatório Final
+	log.Printf("=========================================================")
+	log.Printf("[RESUMO] Execução total finalizada em %v", time.Since(totalStartTime))
+	log.Printf("Total processados: %d | Sucessos: %d | Falhas/Recusas: %d", processados, len(sucessos), len(falhas))
+
+	// Relatório Final em Tela
 	fmt.Print("\n================ RELATÓRIO FINAL ================\n")
 	if len(sucessos) > 0 {
 		fmt.Printf("✅ SUCESSOS (%d):\n", len(sucessos))
@@ -194,7 +229,7 @@ func main() {
 		fmt.Println("\n❌ RECUSADOS: 0")
 	}
 
-	// Gera as planilhas formatadas caso haja novos sucessos ou dados
+	// Gera ou atualiza as planilhas
 	if len(sucessos) > 0 {
 		gerarPlanilhas()
 	}
@@ -203,14 +238,14 @@ func main() {
 }
 
 func gerarPlanilhas() {
-	fmt.Println("\n[INFO] Gerando planilha Excel formatada (modelo institucional) e CSV...")
+	log.Printf("[INFO] Disparando gerador de planilhas formatadas (.xlsx e .csv)...")
 	pyCmd := getPythonCommand()
 	cmd := exec.Command(pyCmd, "gerar_planilha.py")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		fmt.Printf("[ERRO PLANILHA] %v\nSaída: %s\n", err, string(output))
+		log.Printf("[ERRO] Falha ao executar gerar_planilha.py: %v\nSaída do script: %s", err, string(output))
 	} else {
-		fmt.Printf("%s\n", string(output))
+		fmt.Printf("\n%s\n", string(output))
 	}
 }
 
@@ -220,11 +255,17 @@ func salvarResultadoNoDisco(cert *entity.Certificate) {
 
 	f, err := os.OpenFile("dados_extraidos.jsonl", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
+		log.Printf("[ERRO] Não foi possível abrir 'dados_extraidos.jsonl' para gravação: %v", err)
 		return
 	}
 	defer f.Close()
 
-	bytes, _ := json.Marshal(cert)
+	bytes, err := json.Marshal(cert)
+	if err != nil {
+		log.Printf("[ERRO] Falha ao serializar entidade de certificado em JSON: %v", err)
+		return
+	}
 	f.Write(bytes)
 	f.WriteString("\n")
+	log.Printf("[DISCO] Registro salvo com sucesso no banco de dados JSONL (Hash: %s)", cert.Hash)
 }
