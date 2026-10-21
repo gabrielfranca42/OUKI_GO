@@ -26,6 +26,11 @@ import (
 
 var mu sync.Mutex
 
+type Falha struct {
+	Arquivo string
+	Motivo  string
+}
+
 func init() {
 	log.SetFlags(log.Ldate | log.Ltime | log.Lmsgprefix)
 	log.SetPrefix("[OUKI-GO] ")
@@ -180,10 +185,6 @@ func main() {
 	}
 
 	var sucessos []string
-	type Falha struct {
-		Arquivo string
-		Motivo  string
-	}
 	var falhas []Falha
 
 	processedHashes := loadProcessedHashes()
@@ -253,6 +254,7 @@ func main() {
 		for _, f := range falhas {
 			fmt.Printf("   - %s\n     Motivo: %s\n", f.Arquivo, f.Motivo)
 		}
+		salvarLogFalhas(falhas)
 	} else {
 		fmt.Println("\n❌ RECUSADOS: 0")
 	}
@@ -263,6 +265,24 @@ func main() {
 	}
 
 	fmt.Println("=================================================")
+}
+
+func salvarLogFalhas(falhas []Falha) {
+	logFileName := "certificados_nao_lidos.txt"
+	f, err := os.OpenFile(logFileName, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		log.Printf("[ERRO] Falha ao abrir '%s': %v", logFileName, err)
+		return
+	}
+	defer f.Close()
+
+	timestamp := time.Now().Format("2006-01-02 15:04:05")
+	f.WriteString(fmt.Sprintf("\n========== RELATÓRIO DE FALHAS [%s] ==========\n", timestamp))
+	for _, fail := range falhas {
+		f.WriteString(fmt.Sprintf("[%s] Arquivo: %s | Motivo: %s\n", timestamp, fail.Arquivo, fail.Motivo))
+	}
+	f.WriteString("=================================================================\n")
+	log.Printf("[LOG] Arquivo de erros atualizado com sucesso: %s (%d falhas registradas)", logFileName, len(falhas))
 }
 
 func gerarPlanilhas() {

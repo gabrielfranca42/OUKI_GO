@@ -20,7 +20,7 @@ def parse_date_str(date_val):
         return date_val.strftime("%d/%m/%Y")
     return str(date_val).strip()
 
-def gerar_planilha_institucional(jsonl_path, csv_path, xlsx_path, turma_nome="TADS 035-5MN - Acadweb"):
+def gerar_planilha_institucional(jsonl_path, csv_path=None, xlsx_path=None, turma_nome="TADS 035-5MN - Acadweb"):
     logger.info(f"Iniciando geração de relatórios. Origem: {jsonl_path}")
 
     if not os.path.exists(jsonl_path):
@@ -48,148 +48,178 @@ def gerar_planilha_institucional(jsonl_path, csv_path, xlsx_path, turma_nome="TA
 
     logger.info(f"Total de registros válidos carregados: {len(records)}")
 
-    # Agrupa por aluno para permitir gerar planilhas individuais ou consolidada
+    # Agrupa por aluno para gerar arquivo individual por pessoa (caso 1 aluno envie 10 certificados, gera 1 arquivo com seus 10 certificados)
     alunos = {}
     for r in records:
-        aluno = r.get("student_name", "Aluno Não Identificado")
+        aluno = r.get("student_name", "Aluno Não Identificado").strip()
+        if not aluno:
+            aluno = "Aluno Não Identificado"
         if aluno not in alunos:
             alunos[aluno] = []
         alunos[aluno].append(r)
 
     logger.info(f"Total de alunos distintos identificados: {len(alunos)} ({list(alunos.keys())})")
 
-    # 1. Gerar CSV consolidado padronizado (usando biblioteca nativa csv do Python)
-    try:
-        headers_csv = [
-            "ALUNO",
-            "DESCRIÇÃO DA ATIVIDADE / TÍTULO DO CERTIFICADO",
-            "HORAS DECLARADAS",
-            "DATA",
-            "SEMESTRE",
-            "HORAS APROVEITADAS",
-            "CATEGORIA"
-        ]
-        with open(csv_path, 'w', encoding='utf-8', newline='') as f_csv:
-            writer = csv.writer(f_csv, delimiter=';')
-            writer.writerow(headers_csv)
-            for r in records:
-                writer.writerow([
-                    r.get("student_name", ""),
-                    r.get("course_name", ""),
-                    r.get("declared_hours", r.get("hours", 0)),
-                    parse_date_str(r.get("completion_date", "")),
-                    r.get("semester", ""),
-                    r.get("approved_hours", r.get("hours", 0)),
-                    r.get("category", "")
-                ])
-        logger.info(f"CSV consolidado gravado com sucesso: {csv_path} ({len(records)} linhas)")
-    except Exception as e:
-        logger.error(f"Falha ao gerar arquivo CSV ({csv_path}): {e}", exc_info=True)
-
-    # 2. Gerar arquivo Excel (.xlsx) fiel ao modelo institucional
+    # Tenta importar openpyxl para gerar também os .xlsx
+    openpyxl_disponivel = True
     try:
         import openpyxl
         from openpyxl.styles import Font, Alignment
     except ImportError:
+        openpyxl_disponivel = False
         logger.warning(
-            "\n[AVISO IMPORTANTE]: A biblioteca 'openpyxl' não está instalada no Python."
-            "\nO CSV foi gerado com sucesso. Para gerar o arquivo formatado .xlsx, execute:"
+            "\n[AVISO]: A biblioteca 'openpyxl' não está instalada no Python."
+            "\nOs arquivos CSV formatados serão gerados normalmente. Para gerar os .xlsx:"
             "\npip install openpyxl\n"
         )
-        return True
 
     for aluno_nome, certs in alunos.items():
+        nome_sanitizado = "".join(x for x in aluno_nome if x.isalnum() or x in " _-").strip().replace(" ", "_")
+        if not nome_sanitizado:
+            nome_sanitizado = "Aluno"
+
+        # Definir caminhos por pessoa
+        if len(alunos) == 1 and csv_path and xlsx_path:
+            arq_csv = csv_path
+            arq_xlsx = xlsx_path
+        else:
+            arq_csv = f"Soma_Horas_Comp_{nome_sanitizado}.csv"
+            arq_xlsx = f"Soma_Horas_Comp_{nome_sanitizado}.xlsx"
+
+        # ==========================================================
+        # 1. GERAÇÃO DE CSV COM MESMO PADRÃO VISUAL DO MODELO INSTITUCIONAL
+        # ==========================================================
         try:
-            wb = openpyxl.Workbook()
-            ws = wb.active
-            ws.title = "Planilha1"
+            with open(arq_csv, 'w', encoding='utf-8-sig', newline='') as f_csv:
+                writer = csv.writer(f_csv, delimiter=';')
+                
+                # Linha 1 e 2: Cabeçalhos Institucionais
+                writer.writerow(["ATIVIDADES COMPLEMENTARES", "", "", "", ""])
+                writer.writerow([f"Turma: {turma_nome}", "", "", "", ""])
+                writer.writerow(["", "", "", "", ""])
+                writer.writerow([f"Aluno: {aluno_nome}", "", "", "", ""])
+                writer.writerow(["", "", "", "", ""])
 
-            font_header_title = Font(name="Calibri", size=11, bold=True)
-            font_table_header = Font(name="Calibri", size=11, bold=True)
-            font_data = Font(name="Calibri", size=11)
-            font_total = Font(name="Calibri", size=11, bold=True)
+                # Linha 6: Títulos das Colunas
+                headers = [
+                    "DESCRIÇÃO DA ATIVIDADE / TÍTULO DO CERTIFICADO",
+                    "HORAS DECLARADAS",
+                    "DATA",
+                    "SEMESTRE",
+                    "HORAS APROVEITADAS"
+                ]
+                writer.writerow(headers)
 
-            align_center = Alignment(horizontal="center", vertical="center")
-            align_left = Alignment(horizontal="left", vertical="center")
+                # Linhas 7 em diante: Certificados do Aluno
+                total_horas_declaradas = 0
+                total_horas_aproveitadas = 0
+                start_row = 7
+                for idx, c in enumerate(certs, start=start_row):
+                    c_name = c.get("course_name", "")
+                    declared = int(c.get("declared_hours", c.get("hours", 0)))
+                    approved = int(c.get("approved_hours", c.get("hours", 0)))
+                    c_date = parse_date_str(c.get("completion_date", ""))
+                    c_semester = c.get("semester", "")
 
-            # Cabeçalho Institucional
-            ws["A1"] = "ATIVIDADES COMPLEMENTARES"
-            ws["A1"].font = font_header_title
+                    total_horas_declaradas += declared
+                    total_horas_aproveitadas += approved
 
-            ws["A2"] = f"Turma: {turma_nome}"
-            ws["A2"].font = font_header_title
+                    writer.writerow([c_name, declared, c_date, c_semester, approved])
 
-            ws["A4"] = f"Aluno: {aluno_nome}"
-            ws["A4"].font = font_header_title
+                # Linha em branco
+                writer.writerow(["", "", "", "", ""])
 
-            # Títulos das Colunas (Linha 6)
-            headers = [
-                "DESCRIÇÃO DA ATIVIDADE / TÍTULO DO CERTIFICADO",
-                "HORAS DECLARADAS",
-                "DATA",
-                "SEMESTRE",
-                "HORAS APROVEITADAS"
-            ]
-            for col_idx, header in enumerate(headers, start=1):
-                cell = ws.cell(row=6, column=col_idx, value=header)
-                cell.font = font_table_header
-                cell.alignment = align_center
+                # Linha Final: TOTAL DE HORAS COMPLETADAS
+                end_row = start_row + len(certs) - 1
+                formula_total = f"=SUM(E{start_row}:E{end_row})"
+                writer.writerow(["TOTAL DE HORAS COMPLETADAS", "", "", "", formula_total])
 
-            # Inserção das Linhas de Dados (Linha 7 em diante)
-            start_row = 7
-            current_row = start_row
-            for c in certs:
-                c_name = c.get("course_name", "")
-                declared = c.get("declared_hours", c.get("hours", 0))
-                approved = c.get("approved_hours", c.get("hours", 0))
-                c_date = parse_date_str(c.get("completion_date", ""))
-                c_semester = c.get("semester", "")
-
-                ws.cell(row=current_row, column=1, value=c_name).alignment = align_left
-                ws.cell(row=current_row, column=2, value=int(declared)).alignment = align_center
-                ws.cell(row=current_row, column=3, value=c_date).alignment = align_center
-                ws.cell(row=current_row, column=4, value=c_semester).alignment = align_center
-                ws.cell(row=current_row, column=5, value=int(approved)).alignment = align_center
-
-                for col_idx in range(1, 6):
-                    ws.cell(row=current_row, column=col_idx).font = font_data
-
-                current_row += 1
-
-            # Linha em branco e depois Total
-            end_data_row = current_row - 1
-            total_row = current_row + 1
-
-            ws.cell(row=total_row, column=1, value="TOTAL DE HORAS COMPLETADAS").font = font_total
-            total_cell = ws.cell(row=total_row, column=5, value=f"=SUM(E{start_row}:E{end_data_row})")
-            total_cell.font = font_total
-            total_cell.alignment = align_center
-
-            # Ajuste das larguras das colunas
-            ws.column_dimensions['A'].width = 38.0
-            ws.column_dimensions['B'].width = 18.0
-            ws.column_dimensions['C'].width = 16.0
-            ws.column_dimensions['D'].width = 14.0
-            ws.column_dimensions['E'].width = 22.0
-
-            if len(alunos) > 1:
-                nome_sanitizado = "".join(x for x in aluno_nome if x.isalnum() or x in " _-").strip()
-                aluno_xlsx_path = f"Soma_Horas_{nome_sanitizado}.xlsx"
-            else:
-                aluno_xlsx_path = xlsx_path
-
-            wb.save(aluno_xlsx_path)
-            logger.info(f"Excel institucional gerado com sucesso: {aluno_xlsx_path} ({len(certs)} certificados)")
+            logger.info(f"CSV institucional gerado com sucesso por aluno: {arq_csv} ({len(certs)} certificados)")
         except Exception as e:
-            logger.error(f"Erro ao gerar Excel institucional para o aluno '{aluno_nome}': {e}", exc_info=True)
+            logger.error(f"Erro ao gerar CSV para o aluno '{aluno_nome}': {e}", exc_info=True)
+
+        # ==========================================================
+        # 2. GERAÇÃO DE EXCEL (.xlsx) FIEL AO MODELO INSTITUCIONAL
+        # ==========================================================
+        if openpyxl_disponivel:
+            try:
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = "Planilha1"
+
+                font_header_title = Font(name="Calibri", size=11, bold=True)
+                font_table_header = Font(name="Calibri", size=11, bold=True)
+                font_data = Font(name="Calibri", size=11)
+                font_total = Font(name="Calibri", size=11, bold=True)
+
+                align_center = Alignment(horizontal="center", vertical="center")
+                align_left = Alignment(horizontal="left", vertical="center")
+
+                # Cabeçalho Institucional
+                ws["A1"] = "ATIVIDADES COMPLEMENTARES"
+                ws["A1"].font = font_header_title
+
+                ws["A2"] = f"Turma: {turma_nome}"
+                ws["A2"].font = font_header_title
+
+                ws["A4"] = f"Aluno: {aluno_nome}"
+                ws["A4"].font = font_header_title
+
+                # Títulos das Colunas (Linha 6)
+                for col_idx, header in enumerate(headers, start=1):
+                    cell = ws.cell(row=6, column=col_idx, value=header)
+                    cell.font = font_table_header
+                    cell.alignment = align_center
+
+                # Inserção das Linhas de Dados (Linha 7 em diante)
+                start_row = 7
+                current_row = start_row
+                for c in certs:
+                    c_name = c.get("course_name", "")
+                    declared = int(c.get("declared_hours", c.get("hours", 0)))
+                    approved = int(c.get("approved_hours", c.get("hours", 0)))
+                    c_date = parse_date_str(c.get("completion_date", ""))
+                    c_semester = c.get("semester", "")
+
+                    ws.cell(row=current_row, column=1, value=c_name).alignment = align_left
+                    ws.cell(row=current_row, column=2, value=declared).alignment = align_center
+                    ws.cell(row=current_row, column=3, value=c_date).alignment = align_center
+                    ws.cell(row=current_row, column=4, value=c_semester).alignment = align_center
+                    ws.cell(row=current_row, column=5, value=approved).alignment = align_center
+
+                    for col_idx in range(1, 6):
+                        ws.cell(row=current_row, column=col_idx).font = font_data
+
+                    current_row += 1
+
+                # Linha em branco e depois Total
+                end_data_row = current_row - 1
+                total_row = current_row + 1
+
+                ws.cell(row=total_row, column=1, value="TOTAL DE HORAS COMPLETADAS").font = font_total
+                total_cell = ws.cell(row=total_row, column=5, value=f"=SUM(E{start_row}:E{end_data_row})")
+                total_cell.font = font_total
+                total_cell.alignment = align_center
+
+                # Ajuste das larguras das colunas
+                ws.column_dimensions['A'].width = 38.0
+                ws.column_dimensions['B'].width = 18.0
+                ws.column_dimensions['C'].width = 16.0
+                ws.column_dimensions['D'].width = 14.0
+                ws.column_dimensions['E'].width = 22.0
+
+                wb.save(arq_xlsx)
+                logger.info(f"Excel institucional gerado com sucesso por aluno: {arq_xlsx} ({len(certs)} certificados)")
+            except Exception as e:
+                logger.error(f"Erro ao gerar Excel institucional para o aluno '{aluno_nome}': {e}", exc_info=True)
 
     return True
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Exporta dados de certificados para CSV e XLSX institucional.")
+    parser = argparse.ArgumentParser(description="Exporta dados de certificados para CSV e XLSX institucional por aluno.")
     parser.add_argument('--input', default='dados_extraidos.jsonl', help="Caminho do arquivo JSONL de entrada")
-    parser.add_argument('--output-csv', default='planilha_certificados.csv', help="Caminho do arquivo CSV de saída")
-    parser.add_argument('--output-xlsx', default='Soma_Horas_Complementares.xlsx', help="Caminho do arquivo XLSX de saída")
+    parser.add_argument('--output-csv', default=None, help="Caminho do arquivo CSV de saída (se único aluno)")
+    parser.add_argument('--output-xlsx', default=None, help="Caminho do arquivo XLSX de saída (se único aluno)")
     parser.add_argument('--turma', default='TADS 035-5MN - Acadweb', help="Nome/código da turma institucional")
 
     args = parser.parse_args()
