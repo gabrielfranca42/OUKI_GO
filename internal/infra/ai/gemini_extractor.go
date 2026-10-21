@@ -92,25 +92,38 @@ Retorne APENAS o JSON válido seguindo essas chaves, sem nenhuma outra formataç
 `
 
 	log.Printf("[Gemini][INFO] Enviando requisição para o modelo '%s'...", modelName)
-	startTime := time.Now()
 
-	resp, err := model.GenerateContent(ctx, genai.Text(prompt), filePart)
-	duration := time.Since(startTime)
+	var resp *genai.GenerateContentResponse
+	maxRetries := 3
 
-	if err != nil {
-		errStr := err.Error()
-		if strings.Contains(errStr, "429") || strings.Contains(errStr, "Quota exceeded") {
-			log.Printf("[Gemini][ERRO 429] Limite de requisições por minuto da API do Gemini atingido! Detalhe: %v", err)
-			log.Printf("[Gemini][DICA] A API gratuita do Google possui limite de ~5 req/min. Aguarde alguns segundos e tente novamente.")
-		} else {
-			log.Printf("[Gemini][ERRO] Falha na comunicação com a API: %v", err)
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		startTime := time.Now()
+		var errGen error
+		resp, errGen = model.GenerateContent(ctx, genai.Text(prompt), filePart)
+		duration := time.Since(startTime)
+
+		if errGen != nil {
+			errStr := errGen.Error()
+			if strings.Contains(errStr, "429") || strings.Contains(errStr, "Quota exceeded") {
+				if attempt < maxRetries {
+					waitTime := time.Duration(15*attempt) * time.Second
+					log.Printf("[Gemini][RATE-LIMIT 429] Limite de 5 req/min do Free Tier atingido. Pausando %v antes da tentativa %d/%d...",
+						waitTime, attempt+1, maxRetries)
+					time.Sleep(waitTime)
+					continue
+				}
+				log.Printf("[Gemini][ERRO 429] Limite de cota persistiu após %d tentativas: %v", maxRetries, errGen)
+			} else {
+				log.Printf("[Gemini][ERRO] Falha na comunicação com a API: %v", errGen)
+			}
+			return nil, fmt.Errorf("falha na API do Gemini: %w", errGen)
 		}
-		return nil, fmt.Errorf("falha na API do Gemini: %w", err)
+
+		log.Printf("[Gemini][INFO] Resposta recebida com sucesso em %v (tentativa %d)", duration, attempt)
+		break
 	}
 
-	log.Printf("[Gemini][INFO] Resposta recebida com sucesso em %v", duration)
-
-	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
+	if resp == nil || len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
 		log.Printf("[Gemini][ERRO] Resposta da API retornou vazia (nenhum candidato)")
 		return nil, fmt.Errorf("gemini retornou resposta vazia")
 	}
