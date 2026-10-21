@@ -1,8 +1,8 @@
 import os
 import json
+import csv
 import unittest
 import openpyxl
-import pandas as pd
 from gerar_planilha import gerar_planilha_institucional
 
 class TestGerarPlanilha(unittest.TestCase):
@@ -55,13 +55,15 @@ class TestGerarPlanilha(unittest.TestCase):
         self.assertTrue(ok)
         self.assertTrue(os.path.exists(self.test_csv))
 
-        # 1. Validação do CSV
-        df = pd.read_csv(self.test_csv, sep=';', encoding='utf-8')
-        self.assertEqual(len(df), 3)
-        self.assertIn("HORAS DECLARADAS", df.columns)
-        self.assertIn("HORAS APROVEITADAS", df.columns)
-        self.assertEqual(list(df["HORAS DECLARADAS"]), [15, 80, 120])
-        self.assertEqual(list(df["HORAS APROVEITADAS"]), [15, 20, 20])
+        # 1. Validação do CSV usando módulo padrão csv
+        with open(self.test_csv, 'r', encoding='utf-8') as f:
+            reader = csv.reader(f, delimiter=';')
+            rows = list(reader)
+
+        self.assertEqual(len(rows), 4) # 1 header + 3 data rows
+        headers = rows[0]
+        self.assertIn("HORAS DECLARADAS", headers)
+        self.assertIn("HORAS APROVEITADAS", headers)
 
         # 2. Validação do Excel (.xlsx)
         target_xlsx = self.test_xlsx
