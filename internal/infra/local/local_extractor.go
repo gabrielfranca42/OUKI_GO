@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -40,6 +41,7 @@ func (l *LocalRegexExtractor) ExtractData(ctx context.Context, filePath string) 
 	}
 
 	cleanText := strings.TrimSpace(text)
+	cleanText = strings.ReplaceAll(cleanText, "\x00", "")
 	if cleanText == "" {
 		return nil, fmt.Errorf("nenhum texto legível encontrado no documento (pode ser imagem digitalizada sem OCR)")
 	}
@@ -81,8 +83,16 @@ func (l *LocalRegexExtractor) ExtractData(ctx context.Context, filePath string) 
 func (l *LocalRegexExtractor) extractRawText(ctx context.Context, filePath string) (string, error) {
 	ext := strings.ToLower(filepath.Ext(filePath))
 
-	// 1. Se for PDF, tenta ler nativamente as camadas de texto do PDF
+	// 1. Se for PDF, tenta ler via Python (pypdf decodifica fontes com ToUnicode CMap perfeitamente)
 	if ext == ".pdf" {
+		pyText, errPy := readPdfTextWithPython(filePath)
+		if errPy == nil && len(strings.TrimSpace(pyText)) > 20 {
+			return pyText, nil
+		}
+		if errPy != nil {
+			log.Printf("[LocalExtractor][WARN] Falha ao extrair com Python pypdf: %v", errPy)
+		}
+		// Fallback para leitor nativo Go
 		pdfText, err := readPdfText(filePath)
 		if err == nil && len(strings.TrimSpace(pdfText)) > 20 {
 			return pdfText, nil
@@ -96,6 +106,39 @@ func (l *LocalRegexExtractor) extractRawText(ctx context.Context, filePath strin
 	}
 
 	return "", fmt.Errorf("nenhum método disponível para ler o texto de %s", filePath)
+}
+
+func getPythonExecutable() string {
+	candidates := []string{
+		`C:\Users\Aluno\AppData\Local\Programs\Python\Python312\python.exe`,
+		"python3",
+		"python",
+		"py",
+	}
+	for _, c := range candidates {
+		if _, err := exec.LookPath(c); err == nil {
+			// Testa se esse python consegue importar pypdf
+			cmdTest := exec.Command(c, "-c", "import pypdf")
+			if errTest := cmdTest.Run(); errTest == nil {
+				return c
+			}
+		}
+	}
+	return "python"
+}
+
+func readPdfTextWithPython(path string) (string, error) {
+	pyCmd := getPythonExecutable()
+	script := `import pypdf, sys; reader = pypdf.PdfReader(sys.argv[1]); sys.stdout.reconfigure(encoding='utf-8', errors='ignore'); print(''.join(p.extract_text() or '' for p in reader.pages))`
+	cmd := exec.Command(pyCmd, "-c", script, path)
+	var out bytes.Buffer
+	var errBuf bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &errBuf
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("%w (stderr: %s)", err, errBuf.String())
+	}
+	return out.String(), nil
 }
 
 func readPdfText(path string) (string, error) {
@@ -129,7 +172,7 @@ func (l *LocalRegexExtractor) GetDefaultStudentName() string {
 
 func (l *LocalRegexExtractor) extractStudentName(text string, filePath string) string {
 	patterns := []*regexp.Regexp{
-		regexp.MustCompile(`(?i)(?:certificamos\s+que|declaramos\s+que|confere\s+a\s+presente\s+a|atesta\s+que|certifico\s+que|declaramos\s+para\s+os\s+devidos\s+fins\s+que|certifica\s+que|conferido\s+a|outorgado\s+a)\s+([A-ZÀ-Ú][a-zà-úA-ZÀ-Ú\s]{3,60}?)(?:,|\s+com\s+cpf|\s+sob\s+o\s+cpf|\s+concluiu|\s+participou|\s+cumpriu|\s+portador|\s+rg|\.|\n|\r)`),
+		regexp.MustCompile(`(?i)(?:certificamos\s+que|declaramos\s+que|confere\s+a\s+presente\s+a|atesta\s+que|certifico\s+que|declaramos\s+para\s+os\s+devidos\s+fins\s+que|certifica\s+que|certi\s*ca\s+que|conferido\s+a|outorgado\s+a)\s+([A-ZÀ-Ú][a-zà-úA-ZÀ-Ú\s]{3,60}?)(?:,|\s+com\s+cpf|\s+sob\s+o\s+cpf|\s+concluiu|\s+participou|\s+cumpriu|\s+portador|\s+rg|\.|\r?\n)`),
 		regexp.MustCompile(`(?i)(?:aluno|participante|outorgado|estudante)\s*:\s*([A-ZÀ-Ú][a-zà-úA-ZÀ-Ú\s]{3,60}?)(?:\n|\r|,|\.)`),
 		regexp.MustCompile(`(?i)(?:concedido\s+a|emitido\s+para)\s+([A-ZÀ-Ú][a-zà-úA-ZÀ-Ú\s]{3,60}?)(?:,|\s+com|\s+por|\.|\n|\r)`),
 	}
@@ -139,24 +182,24 @@ func (l *LocalRegexExtractor) extractStudentName(text string, filePath string) s
 			name := strings.TrimSpace(matches[1])
 			name = regexp.MustCompile(`\s+`).ReplaceAllString(name, " ")
 			nameLower := strings.ToLower(name)
-			if len(name) >= 3 && !strings.Contains(nameLower, "carga") && !strings.Contains(nameLower, "curso") && !strings.Contains(nameLower, "senac") {
+			if len(name) >= 3 && !strings.Contains(nameLower, "carga") && !strings.Contains(nameLower, "curso") && !strings.Contains(nameLower, "senac") && !strings.Contains(nameLower, "faculdade") && !strings.Contains(nameLower, "rocketseat") {
 				return name
 			}
 		}
 	}
 
-	// Fallback 1: Procura linha em caixa alta após frases clássicas ("Certificamos que", "Conferido a")
+	// Fallback 1: Procura linha em caixa alta ou nome próprio após frases clássicas ("Certificamos que", "Conferido a", "certifica que")
 	lines := strings.Split(text, "\n")
 	for i, line := range lines {
 		lower := strings.ToLower(line)
-		if strings.Contains(lower, "certificamos que") || strings.Contains(lower, "declaramos que") || strings.Contains(lower, "conferido a") {
+		if strings.Contains(lower, "certificamos que") || strings.Contains(lower, "declaramos que") || strings.Contains(lower, "conferido a") || strings.Contains(lower, "certifica que") || strings.Contains(lower, "certi ca que") || strings.Contains(lower, "certica que") {
 			for j := i + 1; j < len(lines) && j <= i+3; j++ {
 				cand := strings.TrimSpace(lines[j])
 				// Se for um nome próprio de 2 a 5 palavras (ex: LUCAS GABRIEL DA SILVA SANTANA)
 				words := strings.Fields(cand)
 				if len(words) >= 2 && len(words) <= 7 && len(cand) >= 5 && len(cand) <= 60 {
 					candLower := strings.ToLower(cand)
-					if !strings.Contains(candLower, "curso") && !strings.Contains(candLower, "carga") && !strings.Contains(candLower, "horas") && !strings.Contains(candLower, "senac") {
+					if !strings.Contains(candLower, "curso") && !strings.Contains(candLower, "carga") && !strings.Contains(candLower, "horas") && !strings.Contains(candLower, "senac") && !strings.Contains(candLower, "representante") && !strings.Contains(candLower, "faculdade") && !strings.Contains(candLower, "rocketseat") {
 						return cand
 					}
 				}
@@ -195,7 +238,8 @@ func (l *LocalRegexExtractor) extractStudentName(text string, filePath string) s
 
 func (l *LocalRegexExtractor) extractCourseName(text string, filePath string) string {
 	patterns := []*regexp.Regexp{
-		regexp.MustCompile(`(?i)(?:concluiu\s+(?:com\s+[êe]xito\s+)?(?:o\s+)?(?:curso\s+(?:de\s+)?)?|participou\s+(?:do\s+)?(?:workshop\s+(?:de\s+)?)?|participa[çc][ãa]o\s+no\s+|atividades\s+de\s+|capacita[çc][ãa]o\s+em\s+)(["“']?[A-ZÀ-Úa-zà-ú0-9\s\-\.\+/#]{4,80}?["”']?)(?:,|\s+com\s+carga|\s+no\s+per[íi]odo|\s+realizado|\.|\n|\r)`),
+		regexp.MustCompile(`(?i)(?:curso(?:\s+de\s+extens[ãa]o)?|plano\s+de\s+estudos)\s+["“']([^"”']+)["”']`),
+		regexp.MustCompile(`(?i)(?:concluiu\s+(?:com\s+[êe]xito\s+)?(?:o\s+)?(?:curso\s+(?:de\s+(?:extens[ãa]o\s+)?)?|plano\s+de\s+estudos\s+)?|completou\s+com\s+sucesso\s+(?:evento\s+|curso\s+)?|participou\s+(?:do\s+)?(?:workshop\s+(?:de\s+)?)?|participa[çc][ãa]o\s+no\s+|atividades\s+de\s+|capacita[çc][ãa]o\s+em\s+)(["“']?[A-ZÀ-Úa-zà-ú0-9\s\-\.\+/#\?\|]{4,100}?["”']?)(?:,|\s+com\s+carga|\s+no\s+per[íi]odo|\s+realizado|\.|\r?\n)`),
 		regexp.MustCompile(`(?i)(?:curso|evento|workshop|treinamento)\s*:\s*([A-ZÀ-Úa-zà-ú0-9\s\-\.\+/#]{4,80}?)(?:\n|\r|,|\.)`),
 	}
 
@@ -236,7 +280,7 @@ func (l *LocalRegexExtractor) extractHours(text string) int {
 		}
 	}
 
-	// Se for estágio e não tiver horas explícitas, padrão é 20
+	// Se for estágio e não tiver horas explícitas, padrão institucional é 20
 	if strings.Contains(strings.ToLower(text), "estágio") || strings.Contains(strings.ToLower(text), "estagio") {
 		return 20
 	}
