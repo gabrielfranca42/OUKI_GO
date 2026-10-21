@@ -16,7 +16,9 @@ import (
 
 	"certextractor/internal/application/usecase"
 	"certextractor/internal/domain/entity"
+	port "certextractor/internal/domain/port"
 	"certextractor/internal/infra/ai"
+	"certextractor/internal/infra/local"
 	"certextractor/internal/infra/ocr"
 
 	"github.com/joho/godotenv"
@@ -67,21 +69,22 @@ func main() {
 		log.Printf("[INFO] Configurações do arquivo .env carregadas com sucesso.")
 	}
 
-	// 1. Instanciar dependências seguindo Clean Architecture / DDD
+	// Instanciar provedores (Clean Architecture / DDD)
 	tesseractOCR := ocr.NewTesseractProvider()
 	gemini := ai.NewGeminiExtractor()
 	groq := ai.NewGroqExtractor(tesseractOCR)
-	balancer := ai.NewExtractorBalancer(gemini, groq)
-	service := usecase.NewExtractCertificateService(balancer)
+	balancerAI := ai.NewExtractorBalancer(gemini, groq)
+	localExtractor := local.NewLocalRegexExtractor(tesseractOCR)
 
 	reader := bufio.NewReader(os.Stdin)
 	fmt.Print("\n====================================================\n")
-	fmt.Print("🤖 OUKI GO - SISTEMA DE HORAS COMPLEMENTARES COM IA 🤖\n")
+	fmt.Print("🤖 OUKI GO - SISTEMA DE HORAS COMPLEMENTARES 🤖\n")
 	fmt.Print("====================================================\n\n")
-	fmt.Println("Selecione o modo de operação:")
-	fmt.Println("  [1] Processar certificados de uma pasta local")
-	fmt.Println("  [2] Baixar do E-mail (Gmail / Outlook / Google Drive) e processar")
-	fmt.Println("  [3] Apenas regenerar planilhas (XLSX institucional e CSV)")
+	fmt.Println("Selecione o modo de processamento:")
+	fmt.Println("  [1] Análise LOCAL (Sem IA - Ilimitado, Ultra-Rápido, Sem Cotas)")
+	fmt.Println("  [2] Análise com IA em Nuvem (Gemini / Groq)")
+	fmt.Println("  [3] Baixar do E-mail (Gmail / Outlook / Google Drive) e processar")
+	fmt.Println("  [4] Apenas regenerar planilhas (XLSX institucional e CSV)")
 	fmt.Print("\nOpção (padrão 1): ")
 
 	opcao, _ := reader.ReadString('\n')
@@ -90,14 +93,32 @@ func main() {
 		opcao = "1"
 	}
 
-	if opcao == "3" {
+	if opcao == "4" {
 		gerarPlanilhas()
 		return
 	}
 
+	var extractor port.CertificateExtractor
+	isCloudAI := false
+
+	switch opcao {
+	case "2":
+		extractor = balancerAI
+		isCloudAI = true
+		log.Printf("[INFO] Modo selecionado: IA em Nuvem (Gemini + Groq Fallback)")
+	case "3":
+		extractor = localExtractor
+		log.Printf("[INFO] Modo selecionado: Coleta por E-mail + Extração Local")
+	default:
+		extractor = localExtractor
+		log.Printf("[INFO] Modo selecionado: Extração Local Heurística (Sem IA - Ilimitado)")
+	}
+
+	service := usecase.NewExtractCertificateService(extractor)
+
 	var dirPath string
 
-	if opcao == "2" {
+	if opcao == "3" {
 		log.Printf("[INFO] Iniciando conector de e-mail (anexos e links do Google Drive)...")
 		pyCmd := getPythonCommand()
 		cmd := exec.Command(pyCmd, "email_fetcher.py", "--output", "downloads_certificados")
@@ -107,7 +128,7 @@ func main() {
 		startEmailTime := time.Now()
 		if err := cmd.Run(); err != nil {
 			log.Printf("[ERRO] Falha crítica ao executar o conector de e-mails: %v", err)
-			log.Printf("[DICA] Verifique se OUTLOOK_EMAIL e OUTLOOK_PASSWORD estão corretos no .env")
+			log.Printf("[DICA] Verifique se as credenciais estão corretas no .env")
 			return
 		}
 		log.Printf("[INFO] Coleta de e-mails concluída em %v", time.Since(startEmailTime))
@@ -202,8 +223,11 @@ func main() {
 					cert.StudentName, cert.CourseName, cert.ApprovedHours, cert.DeclaredHours, cert.Semester))
 			}
 		}
+
 		processados++
-		if processados < len(imagensValidas) {
+
+		// Se estiver usando IA em nuvem, aplica pausa de 10s para não estourar a cota gratuita
+		if isCloudAI && processados < len(imagensValidas) {
 			log.Printf("[RATE-LIMIT] Aguardando 10 segundos para respeitar a cota da API do Gemini (Free Tier)...")
 			time.Sleep(10 * time.Second)
 		}
