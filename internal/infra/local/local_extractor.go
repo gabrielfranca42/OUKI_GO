@@ -19,7 +19,8 @@ import (
 // LocalRegexExtractor implementa port.CertificateExtractor sem usar nenhuma IA de nuvem.
 // Extrai texto diretamente de PDFs e imagens e analisa usando Heurística e Regex.
 type LocalRegexExtractor struct {
-	ocrProvider port.Provider
+	ocrProvider        port.Provider
+	defaultStudentName string
 }
 
 // NewLocalRegexExtractor instancia o extrator local
@@ -46,6 +47,10 @@ func (l *LocalRegexExtractor) ExtractData(ctx context.Context, filePath string) 
 	log.Printf("[LocalExtractor][INFO] Texto extraído com sucesso (%d caracteres). Aplicando heurística...", len(cleanText))
 
 	studentName := l.extractStudentName(cleanText, filePath)
+	if studentName == "" {
+		return nil, fmt.Errorf("não foi possível identificar o nome do aluno no certificado e nenhum aluno padrão foi definido para o lote")
+	}
+
 	courseName := l.extractCourseName(cleanText, filePath)
 	hours := l.extractHours(cleanText)
 	completionDate := l.extractDate(cleanText)
@@ -113,39 +118,79 @@ func readPdfText(path string) (string, error) {
 	return buf.String(), nil
 }
 
+// SetDefaultStudentName define um nome de aluno padrão herdado (por exemplo, do lote/pasta)
+func (l *LocalRegexExtractor) SetDefaultStudentName(name string) {
+	l.defaultStudentName = strings.TrimSpace(name)
+}
+
+func (l *LocalRegexExtractor) GetDefaultStudentName() string {
+	return l.defaultStudentName
+}
+
 func (l *LocalRegexExtractor) extractStudentName(text string, filePath string) string {
 	patterns := []*regexp.Regexp{
-		regexp.MustCompile(`(?i)(?:certificamos\s+que|declaramos\s+que|confere\s+a\s+presente\s+a|atesta\s+que|certifico\s+que|declaramos\s+para\s+os\s+devidos\s+fins\s+que|certifica\s+que|conferido\s+a)\s+([A-ZÀ-Ú][a-zà-úA-ZÀ-Ú\s]{3,60}?)(?:,|\s+com\s+cpf|\s+concluiu|\s+participou|\s+cumpriu|\s+portador|\s+rg|\.|\n|\r)`),
-		regexp.MustCompile(`(?i)(?:aluno|participante|outorgado)\s*:\s*([A-ZÀ-Ú][a-zà-úA-ZÀ-Ú\s]{3,60}?)(?:\n|\r|,|\.)`),
+		regexp.MustCompile(`(?i)(?:certificamos\s+que|declaramos\s+que|confere\s+a\s+presente\s+a|atesta\s+que|certifico\s+que|declaramos\s+para\s+os\s+devidos\s+fins\s+que|certifica\s+que|conferido\s+a|outorgado\s+a)\s+([A-ZÀ-Ú][a-zà-úA-ZÀ-Ú\s]{3,60}?)(?:,|\s+com\s+cpf|\s+sob\s+o\s+cpf|\s+concluiu|\s+participou|\s+cumpriu|\s+portador|\s+rg|\.|\n|\r)`),
+		regexp.MustCompile(`(?i)(?:aluno|participante|outorgado|estudante)\s*:\s*([A-ZÀ-Ú][a-zà-úA-ZÀ-Ú\s]{3,60}?)(?:\n|\r|,|\.)`),
+		regexp.MustCompile(`(?i)(?:concedido\s+a|emitido\s+para)\s+([A-ZÀ-Ú][a-zà-úA-ZÀ-Ú\s]{3,60}?)(?:,|\s+com|\s+por|\.|\n|\r)`),
 	}
 
 	for _, p := range patterns {
 		if matches := p.FindStringSubmatch(text); len(matches) > 1 {
 			name := strings.TrimSpace(matches[1])
 			name = regexp.MustCompile(`\s+`).ReplaceAllString(name, " ")
-			if len(name) >= 3 && !strings.Contains(strings.ToLower(name), "carga") {
+			nameLower := strings.ToLower(name)
+			if len(name) >= 3 && !strings.Contains(nameLower, "carga") && !strings.Contains(nameLower, "curso") && !strings.Contains(nameLower, "senac") {
 				return name
 			}
 		}
 	}
 
-	// Fallback por linha: procura após "Certificamos que"
+	// Fallback 1: Procura linha em caixa alta após frases clássicas ("Certificamos que", "Conferido a")
 	lines := strings.Split(text, "\n")
 	for i, line := range lines {
 		lower := strings.ToLower(line)
-		if strings.Contains(lower, "certificamos") || strings.Contains(lower, "declaramos") {
-			if i+1 < len(lines) {
-				candidate := strings.TrimSpace(lines[i+1])
-				if len(candidate) > 4 && len(candidate) < 50 && !strings.Contains(candidate, ":") {
-					return candidate
+		if strings.Contains(lower, "certificamos que") || strings.Contains(lower, "declaramos que") || strings.Contains(lower, "conferido a") {
+			for j := i + 1; j < len(lines) && j <= i+3; j++ {
+				cand := strings.TrimSpace(lines[j])
+				// Se for um nome próprio de 2 a 5 palavras (ex: LUCAS GABRIEL DA SILVA SANTANA)
+				words := strings.Fields(cand)
+				if len(words) >= 2 && len(words) <= 7 && len(cand) >= 5 && len(cand) <= 60 {
+					candLower := strings.ToLower(cand)
+					if !strings.Contains(candLower, "curso") && !strings.Contains(candLower, "carga") && !strings.Contains(candLower, "horas") && !strings.Contains(candLower, "senac") {
+						return cand
+					}
 				}
 			}
 		}
 	}
 
-	// Fallback final: tenta inferir do nome do arquivo
-	base := strings.TrimSuffix(filepath.Base(filePath), filepath.Ext(filePath))
-	return "Aluno Identificado (" + base + ")"
+	// Fallback 2: Se já temos um aluno identificado no lote/pasta, herda para unificar
+	if l.defaultStudentName != "" {
+		log.Printf("[LocalExtractor][HERANÇA] Nome do aluno não explicitado no certificado. Herdando aluno do lote: '%s'", l.defaultStudentName)
+		return l.defaultStudentName
+	}
+
+	// Fallback 3: Tenta usar o nome da pasta onde o certificado está localizado (ex: "CERTIFICADO/Lucas_Santana/cert.pdf" -> "Lucas_Santana")
+	parentDir := filepath.Base(filepath.Dir(filePath))
+	parentLower := strings.ToLower(parentDir)
+	genericNames := map[string]bool{
+		"certificado": true, "certificados": true, "downloads": true, "download": true,
+		"documents": true, "documentos": true, "desktop": true, ".": true, "/": true, "\\": true,
+		"downloads_certificados": true,
+	}
+
+	if parentDir != "" && !genericNames[parentLower] {
+		// Substitui sublinhados por espaços e limpa
+		nomeFormatado := strings.ReplaceAll(parentDir, "_", " ")
+		nomeFormatado = strings.TrimSpace(nomeFormatado)
+		if len(nomeFormatado) >= 3 {
+			log.Printf("[LocalExtractor][PASTA] Nome do aluno extraído do nome da subpasta: '%s'", nomeFormatado)
+			return nomeFormatado
+		}
+	}
+
+	// Se não achou nenhum e não tem aluno padrão no lote ou subpasta, não inventa nome pelo arquivo
+	return ""
 }
 
 func (l *LocalRegexExtractor) extractCourseName(text string, filePath string) string {

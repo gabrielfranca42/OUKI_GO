@@ -149,23 +149,25 @@ func main() {
 		return
 	}
 
-	files, err := os.ReadDir(dirPath)
-	if err != nil {
-		log.Printf("[ERRO] Não foi possível acessar o diretório '%s'. Motivo: %v", dirPath, err)
-		return
-	}
-
 	var imagensValidas []string
 	validExtensions := map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".webp": true, ".pdf": true}
 
-	for _, file := range files {
-		if file.IsDir() {
-			continue
+	err := filepath.WalkDir(dirPath, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
 		}
-		ext := strings.ToLower(filepath.Ext(file.Name()))
-		if validExtensions[ext] {
-			imagensValidas = append(imagensValidas, filepath.Join(dirPath, file.Name()))
+		if !d.IsDir() {
+			ext := strings.ToLower(filepath.Ext(d.Name()))
+			if validExtensions[ext] {
+				imagensValidas = append(imagensValidas, path)
+			}
 		}
+		return nil
+	})
+
+	if err != nil {
+		log.Printf("[ERRO] Erro ao varrer diretório '%s': %v", dirPath, err)
+		return
 	}
 
 	if len(imagensValidas) == 0 {
@@ -173,7 +175,7 @@ func main() {
 		return
 	}
 
-	log.Printf("[INFO] Encontrados %d arquivos válidos para processamento na pasta '%s'.", len(imagensValidas), dirPath)
+	log.Printf("[INFO] Encontrados %d arquivos válidos para processamento na pasta e subpastas de '%s'.", len(imagensValidas), dirPath)
 
 	// Configuração de limite/cota
 	cotaMaxima := 0
@@ -198,8 +200,12 @@ func main() {
 		}
 
 		baseName := filepath.Base(imgPath)
+		currentSubdir := filepath.Dir(imgPath)
 		log.Printf("---------------------------------------------------------")
 		log.Printf("[PROCESSO] Início da extração: %s (%d/%d)", baseName, processados+1, len(imagensValidas))
+
+		// Limpa herança de lote global para não contaminar pastas diferentes
+		localExtractor.SetDefaultStudentName("")
 
 		itemStart := time.Now()
 		cert, err := service.Execute(context.Background(), imgPath)
@@ -219,6 +225,8 @@ func main() {
 				salvarResultadoNoDisco(cert)
 				log.Printf("[SUCESSO] '%s' concluído em %v -> Aluno: %s | Horas: %d declaradas / %d aproveitadas | Semestre: %s",
 					baseName, itemDuration, cert.StudentName, cert.DeclaredHours, cert.ApprovedHours, cert.Semester)
+
+				_ = currentSubdir
 
 				sucessos = append(sucessos, fmt.Sprintf("%s | %s (%d/%d hrs, %s)",
 					cert.StudentName, cert.CourseName, cert.ApprovedHours, cert.DeclaredHours, cert.Semester))

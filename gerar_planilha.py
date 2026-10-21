@@ -48,17 +48,42 @@ def gerar_planilha_institucional(jsonl_path, csv_path=None, xlsx_path=None, turm
 
     logger.info(f"Total de registros válidos carregados: {len(records)}")
 
-    # Agrupa por aluno para gerar arquivo individual por pessoa (caso 1 aluno envie 10 certificados, gera 1 arquivo com seus 10 certificados)
-    alunos = {}
+    # Unificação inteligente de nomes: encontra o nome mais completo e representativo
+    # Ex: se existir 'LUCAS GABRIEL DA SILVA SANTANA' e 'LUCAS SANTANA', unifica no nome completo
+    nomes_originais = [r.get("student_name", "").strip() for r in records if r.get("student_name")]
+    nome_canônico = {}
+
+    # Encontra nomes reais completos (que não começam com 'Aluno Identificado')
+    nomes_reais = [n for n in set(nomes_originais) if not n.lower().startswith("aluno identificado") and len(n.split()) >= 2]
+    nomes_reais.sort(key=lambda x: len(x), reverse=True)  # Mais longo primeiro
+
     for r in records:
         aluno = r.get("student_name", "Aluno Não Identificado").strip()
-        if not aluno:
-            aluno = "Aluno Não Identificado"
+        aluno_final = aluno
+
+        # Se for "Aluno Identificado...", tenta associar ao nome real mais provável
+        if aluno.lower().startswith("aluno identificado") and nomes_reais:
+            aluno_final = nomes_reais[0]
+        else:
+            # Verifica se é uma abreviação ou substring de um nome mais longo (ex: LUCAS SANTANA em LUCAS GABRIEL DA SILVA SANTANA)
+            for nr in nomes_reais:
+                palavras_aluno = set(aluno.lower().split())
+                palavras_nr = set(nr.lower().split())
+                if palavras_aluno.issubset(palavras_nr) or (len(palavras_aluno & palavras_nr) >= 2 and palavras_aluno.intersection({"silva", "santos", "da", "de"})):
+                    aluno_final = nr
+                    break
+
+        r["student_name"] = aluno_final
+
+    # Agrupa por aluno normalizado
+    alunos = {}
+    for r in records:
+        aluno = r.get("student_name", "Aluno Não Identificado")
         if aluno not in alunos:
             alunos[aluno] = []
         alunos[aluno].append(r)
 
-    logger.info(f"Total de alunos distintos identificados: {len(alunos)} ({list(alunos.keys())})")
+    logger.info(f"Total de alunos distintos identificados após normalização: {len(alunos)} ({list(alunos.keys())})")
 
     # Tenta importar openpyxl para gerar também os .xlsx
     openpyxl_disponivel = True
