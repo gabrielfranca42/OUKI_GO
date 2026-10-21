@@ -203,6 +203,10 @@ func main() {
 			}
 		}
 		processados++
+		if processados < len(imagensValidas) {
+			log.Printf("[RATE-LIMIT] Aguardando 10 segundos para respeitar a cota da API do Gemini (Free Tier)...")
+			time.Sleep(10 * time.Second)
+		}
 	}
 
 	log.Printf("=========================================================")
