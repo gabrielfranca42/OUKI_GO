@@ -28,3 +28,12 @@ list_models.go
 
 # Variáveis de ambiente
 .env
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Downloads e planilhas geradas
+downloads_certificados/
+*.xlsx
+
