@@ -136,19 +136,39 @@ def gerar_planilha_institucional(jsonl_path, csv_path=None, xlsx_path=None, turm
                 writer.writerow(headers)
 
                 # Linhas 7 em diante: Certificados do Aluno
-                total_horas_declaradas = 0
-                total_horas_aproveitadas = 0
+                # Regra Institucional Global:
+                # O teto de 20 horas aproveitadas é sobre a SOMA DE TODOS os certificados de cursos (não por certificado).
+                # Estágio possui pool separado independente de 20h.
+                saldo_cursos_disponivel = 20
+                saldo_estagio_disponivel = 20
                 start_row = 7
-                for idx, c in enumerate(certs, start=start_row):
+
+                linhas_dados = []
+                for c in certs:
                     c_name = c.get("course_name", "")
                     declared = int(c.get("declared_hours", c.get("hours", 0)))
-                    approved = int(c.get("approved_hours", c.get("hours", 0)))
                     c_date = parse_date_str(c.get("completion_date", ""))
                     c_semester = c.get("semester", "")
+                    cat = c.get("category", "")
+                    is_estagio = "estágio" in cat.lower() or "estagio" in cat.lower() or "estágio" in c_name.lower() or "estagio" in c_name.lower()
 
-                    total_horas_declaradas += declared
-                    total_horas_aproveitadas += approved
+                    approved = 0
+                    if is_estagio:
+                        if saldo_estagio_disponivel > 0:
+                            approved = min(declared if declared > 0 else 20, saldo_estagio_disponivel)
+                            saldo_estagio_disponivel -= approved
+                    else:
+                        if saldo_cursos_disponivel > 0:
+                            approved = min(declared, saldo_cursos_disponivel)
+                            saldo_cursos_disponivel -= approved
 
+                    linhas_dados.append({
+                        "name": c_name,
+                        "declared": declared,
+                        "date": c_date,
+                        "semester": c_semester,
+                        "approved": approved
+                    })
                     writer.writerow([c_name, declared, c_date, c_semester, approved])
 
                 # Linha em branco
@@ -199,18 +219,12 @@ def gerar_planilha_institucional(jsonl_path, csv_path=None, xlsx_path=None, turm
                 # Inserção das Linhas de Dados (Linha 7 em diante)
                 start_row = 7
                 current_row = start_row
-                for c in certs:
-                    c_name = c.get("course_name", "")
-                    declared = int(c.get("declared_hours", c.get("hours", 0)))
-                    approved = int(c.get("approved_hours", c.get("hours", 0)))
-                    c_date = parse_date_str(c.get("completion_date", ""))
-                    c_semester = c.get("semester", "")
-
-                    ws.cell(row=current_row, column=1, value=c_name).alignment = align_left
-                    ws.cell(row=current_row, column=2, value=declared).alignment = align_center
-                    ws.cell(row=current_row, column=3, value=c_date).alignment = align_center
-                    ws.cell(row=current_row, column=4, value=c_semester).alignment = align_center
-                    ws.cell(row=current_row, column=5, value=approved).alignment = align_center
+                for d in linhas_dados:
+                    ws.cell(row=current_row, column=1, value=d["name"]).alignment = align_left
+                    ws.cell(row=current_row, column=2, value=d["declared"]).alignment = align_center
+                    ws.cell(row=current_row, column=3, value=d["date"]).alignment = align_center
+                    ws.cell(row=current_row, column=4, value=d["semester"]).alignment = align_center
+                    ws.cell(row=current_row, column=5, value=d["approved"]).alignment = align_center
 
                     for col_idx in range(1, 6):
                         ws.cell(row=current_row, column=col_idx).font = font_data

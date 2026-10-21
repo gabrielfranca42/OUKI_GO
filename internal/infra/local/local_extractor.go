@@ -223,8 +223,9 @@ func (l *LocalRegexExtractor) extractCourseName(text string, filePath string) st
 
 func (l *LocalRegexExtractor) extractHours(text string) int {
 	patterns := []*regexp.Regexp{
-		regexp.MustCompile(`(?i)(?:carga\s+hor[áa]ria(?:\s+de)?|totalizando|dura[çc][ãa]o(?:\s+de)?)\s*:?\s*(\d{1,4})\s*(?:h|horas|hrs?)`),
-		regexp.MustCompile(`(?i)(\d{1,3})\s*(?:horas|hrs|h)\b`),
+		regexp.MustCompile(`(?i)(?:carga\s+hor[áa]ria(?:\s+total)?(?:\s+de)?|totalizando|dura[çc][ãa]o(?:\s+de)?)\s*:?\s*(\d{1,4})\s*(?:h|horas|hrs?)`),
+		regexp.MustCompile(`(?i)(?:com|de)\s+(\d{1,4})\s*(?:horas|hrs?|h)\s+(?:de\s+dura[çc][ãa]o|de\s+carga|de\s+atividades)`),
+		regexp.MustCompile(`(?i)(\d{1,4})\s*(?:horas|hrs|h)\b`),
 	}
 
 	for _, p := range patterns {
@@ -240,7 +241,7 @@ func (l *LocalRegexExtractor) extractHours(text string) int {
 		return 20
 	}
 
-	return 20 // Padrão seguro institucional
+	return 20 // Padrão seguro institucional caso não encontre número legível
 }
 
 func (l *LocalRegexExtractor) extractDate(text string) string {
